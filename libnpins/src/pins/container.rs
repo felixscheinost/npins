@@ -30,6 +30,11 @@ impl diff::Diff for Pin {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct ContainerVersion {
     pub image_digest: String,
+
+    // Allows us to skip the `fetch` if we just did a `update`
+    // (As the `update` already contains the hash)
+    #[serde(skip)]
+    freshly_fetched_hash: Option<String>,
 }
 
 impl diff::Diff for ContainerVersion {
@@ -55,14 +60,18 @@ impl Updatable for Pin {
     type Hashes = ContainerHash;
 
     async fn update(&self, _old: Option<&ContainerVersion>) -> anyhow::Result<ContainerVersion> {
+        let result =
+            nix_prefetch_docker(&self.image_name, &self.image_tag, &self.arch, None).await?;
         Ok(ContainerVersion {
-            image_digest: nix_prefetch_docker(&self.image_name, &self.image_tag, &self.arch, None)
-                .await?
-                .image_digest,
+            image_digest: result.image_digest,
+            freshly_fetched_hash: Some(result.hash),
         })
     }
 
     async fn fetch(&self, version: &ContainerVersion) -> anyhow::Result<ContainerHash> {
+        if let Some(hash) = &version.freshly_fetched_hash {
+            return Ok(ContainerHash { hash: hash.clone() });
+        }
         Ok(ContainerHash {
             hash: nix_prefetch_docker(
                 &self.image_name,
